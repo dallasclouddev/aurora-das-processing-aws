@@ -1,41 +1,92 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Transform: 'AWS::Serverless-2016-10-31'
-Description: >-
-  This Lambda function reads the Kinesis Data Firehose records as Input, decrypt the log records using KMS key, 
-  unzip the records and then categories the event type into S3 folder structure
-Parameters: 
+Transform: AWS::Serverless-2016-10-31
+Parameters:
   BucketNamePrefix:
     Type: String
-    Default: dastestbucket
-  KeyName:
+    Default: 716435679663-sourcecode
+  KeyID:
     Type: String
+    Default: e5c183a0-6411-4ae6-a797-63affdccc4ac
   RegionName:
     Type: String
     Default: us-east-1
-  AuroraResourceID:
+  AuroraKinesisStramName:
     Type: String
+    Default: aws-rds-das-cluster-V2U7TJ6DXJTN4YD4YMHD32GF3U
+  AuroraClusterID: # Add this new parameter
+    Type: String
+    Default: cluster-V2U7TJ6DXJTN4YD4YMHD32GF3U
 
 Resources:
-  dasProcessor:
-    Type: 'AWS::Serverless::Function'
+  # Add this new resource for the execution role
+  DASProcessorRole:
+    Type: AWS::IAM::Role
     Properties:
+      RoleName: das-processor-lambda-execution-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: DASProcessorPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - cloudwatch:PutMetricData
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - kms:Decrypt
+                Resource: !Sub arn:aws:kms:${AWS::Region}:${AWS::AccountId}:key/${KeyID}
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:DeleteObject
+                  - s3:ListBucket
+                  - s3:GetObjectVersion
+                Resource:
+                  - !Sub arn:aws:s3:::${BucketNamePrefix}/*
+                  - !Sub arn:aws:s3:::${BucketNamePrefix}
+              - Effect: Allow
+                Action:
+                  - kinesis:GetRecords
+                  - kinesis:GetShardIterator
+                  - kinesis:DescribeStream
+                  - kinesis:ListShards
+                Resource: !Sub arn:aws:kinesis:${AWS::Region}:${AWS::AccountId}:stream/${AuroraKinesisStramName}
+
+  dasProcessorLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: DAS-Processor-Lambda
       Handler: lambda_function.lambda_handler
-      Runtime: python3.8
+      Runtime: python3.12
       CodeUri: .
-      Description: >-
-        An Amazon Kinesis Data Firehose stream processor that accesses the records in
-        the input and returns them with a processing status.  Use this processor
-        for any custom transformation logic.
-      MemorySize: 128
-      Timeout: 3
+      Description: An Amazon Kinesis Data Firehose stream processor that accesses the records in the input and returns them with a processing status.
+      MemorySize: 256
+      Timeout: 2
+      Role: !GetAtt DASProcessorRole.Arn  # Reference the custom role
       Environment:
         Variables:
           bucket_name: !Ref BucketNamePrefix
           region_name: !Ref RegionName
-          resource_id: !Ref AuroraResourceID
-      Policies:
-          - CloudWatchPutMetricPolicy: {}
-          - KMSDecryptPolicy:
-              KeyId: ${KeyName}
-          - S3WritePolicy:
-              BucketName: ${BucketNamePrefix}
+          resource_id: !Ref AuroraClusterID
+      Events:
+        DASStream:
+          Type: Kinesis
+          Properties:
+            Stream: !Sub arn:aws:kinesis:${AWS::Region}:${AWS::AccountId}:stream/${AuroraKinesisStramName}
+            StartingPosition: LATEST
+            BatchSize: 100
+            MaximumBatchingWindowInSeconds: 30
+    Metadata:
+      SamResourceId: dasProcessorLambda
+
