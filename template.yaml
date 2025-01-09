@@ -85,8 +85,8 @@ Resources:
           Properties:
             Stream: !Sub arn:aws:kinesis:${AWS::Region}:${AWS::AccountId}:stream/${AuroraKinesisStramName}
             StartingPosition: LATEST
-            BatchSize: 100
-            MaximumBatchingWindowInSeconds: 30
+            BatchSize: 10
+            MaximumBatchingWindowInSeconds: 5
     Metadata:
       SamResourceId: dasProcessorLambda
 
