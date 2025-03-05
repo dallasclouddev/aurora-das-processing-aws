@@ -2,11 +2,7 @@ AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 
 Parameters:
-#  AmiId:
-#    Type: String
-#    Default: 'ami-02a53b0d62d37a75'
-#    Description: 'Amazon Linux 2 AMI ID'
-
+  #Parameter that AWS maintains
   AmiId:
     Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
     Default: '/aws/service/ami-amazon-linux-latest/amzn2-ami-kernel-5.10-hvm-x86_64-gp2'
@@ -37,6 +33,11 @@ Parameters:
     Default: t3.small
     Description: EC2 instance type
 
+  SecretId:
+    Type: String
+    Default: 'rds!cluster-09cbfc0d-f087-4779-a4b6-cfd855d35a39'
+    Description: 'Aurora cluster secret ID from Secrets Manager'
+
 Resources:
   EC2SecurityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -48,7 +49,7 @@ Resources:
         - IpProtocol: tcp
           FromPort: 22
           ToPort: 22
-          CidrIp: 99.65.56.253/0  # Consider restricting to your IP range
+          CidrIp: 99.65.56.253/32  # Consider restricting to your IP range
       Tags:
         - Key: Name
           Value: !Sub ${AWS::StackName}-ec2-sg
@@ -99,7 +100,7 @@ Resources:
           yum install -y python3-pip
           yum install -y python3-psycopg2
           # Retrieve secret from Secrets Manager
-          SECRET_VALUE=$(aws secretsmanager get-secret-value --region us-east-1 --secret-id MySecret --query 'SecretString' --output text)
+          SECRET_VALUE=$(aws secretsmanager get-secret-value --region ${AWS::Region} --secret-id ${SecretId} --query 'SecretString' --output text)
           export MY_SECRET=$SECRET_VALUE
 
 
