@@ -1,0 +1,137 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+
+Parameters:
+#  AmiId:
+#    Type: String
+#    Default: 'ami-02a53b0d62d37a75'
+#    Description: 'Amazon Linux 2 AMI ID'
+
+  AmiId:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
+    Default: '/aws/service/ami-amazon-linux-latest/amzn2-ami-kernel-5.10-hvm-x86_64-gp2'
+
+
+  ExistingVPCId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC ID where Aurora cluster is deployed
+    Default: vpc-059b3df4da7d00112
+
+  PublicSubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Description: Public subnet ID for the EC2 instance
+    Default: subnet-019ec80eb58138877
+
+  AuroraSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Security Group ID of the Aurora cluster
+    Default: sg-087c1d3abf61e170e
+
+  KeyPairName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Name of existing EC2 KeyPair for SSH access
+    Default: us-east-1-ec2-key
+
+  InstanceType:
+    Type: String
+    Default: t3.small
+    Description: EC2 instance type
+
+Resources:
+  EC2SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+#    GroupName: !Sub ${AWS::StackName}-sg
+    Properties:
+      GroupDescription: Security group for EC2 instance to connect to Aurora
+      VpcId: !Ref ExistingVPCId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 99.65.56.253/0  # Consider restricting to your IP range
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-ec2-sg
+
+  EC2Role:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonRDSFullAccess
+        - arn:aws:iam::aws:policy/AmazonSSMManagedEC2InstanceDefaultPolicy
+        - arn:aws:iam::aws:policy/SecretsManagerReadWrite
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-ec2-role
+
+  EC2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: /
+      Roles:
+        - !Ref EC2Role
+
+  EC2Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      IamInstanceProfile: !Ref EC2InstanceProfile
+      InstanceType: !Ref InstanceType
+      SubnetId: !Ref PublicSubnetId
+      SecurityGroupIds:
+        - !Ref EC2SecurityGroup
+      KeyName: !Ref KeyPairName
+      ImageId: !Ref AmiId
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-ec2
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          yum update -y
+          yum install -y postgresql15
+          yum install -y python3-pip
+          yum install -y python3-psycopg2
+          # Retrieve secret from Secrets Manager
+          SECRET_VALUE=$(aws secretsmanager get-secret-value --region us-east-1 --secret-id MySecret --query 'SecretString' --output text)
+          export MY_SECRET=$SECRET_VALUE
+
+
+  # Allow EC2 to access Aurora
+  AuroraIngressRule:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref AuroraSecurityGroupId
+      IpProtocol: tcp
+      FromPort: 5432
+      ToPort: 5432
+      SourceSecurityGroupId: !Ref EC2SecurityGroup
+
+Outputs:
+  EC2InstanceId:
+    Description: EC2 Instance ID
+    Value: !Ref EC2Instance
+
+  EC2PublicDNS:
+    Description: Public DNS name of EC2 instance
+    Value: !GetAtt EC2Instance.PublicDnsName
+
+  EC2SecurityGroupId:
+    Description: Security Group ID for EC2 instance
+    Value: !Ref EC2SecurityGroup
+
+
+#aws cloudformation deploy --template-file ec2-connect-aurora.yaml --stack-name aurora-ec2-client -- profile sandbox--capabilities CAPABILITY_IAM\
+#  --parameter-overrides \
+#    ExistingVPCId=vpc-xxxx \
+#    PublicSubnetId=subnet-xxxx \
+#    AuroraSecurityGroupId=sg-xxxx \
+#    KeyPairName=your-key-pair \
+#    InstanceType=t3.micro \
+
