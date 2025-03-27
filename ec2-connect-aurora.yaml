@@ -4,8 +4,9 @@ Transform: AWS::Serverless-2016-10-31
 Parameters:
   #Parameter that AWS maintains
   AmiId:
-    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
-    Default: '/aws/service/ami-amazon-linux-latest/amzn2-ami-kernel-5.10-hvm-x86_64-gp2'
+    Type: String
+    Default: 'ami-08b5b3a93ed654d19' #AWS Linux 2 AMI al2023-ami-2023.6.20250303.0-kernel-6.1-x86_64 for us-east-1
+    Description: AMI ID to be used in the EC2 instance
 
 
   ExistingVPCId:
@@ -66,6 +67,7 @@ Resources:
             Action: sts:AssumeRole
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/AmazonRDSFullAccess
+        - arn:aws:iam::aws:policy/AmazonKinesisFullAccess
         - arn:aws:iam::aws:policy/AmazonSSMManagedEC2InstanceDefaultPolicy
         - arn:aws:iam::aws:policy/SecretsManagerReadWrite
       Tags:
@@ -95,13 +97,65 @@ Resources:
       UserData:
         Fn::Base64: !Sub |
           #!/bin/bash
-          yum update -y
-          yum install -y postgresql15
-          yum install -y python3-pip
-          yum install -y python3-psycopg2
-          # Retrieve secret from Secrets Manager
-          SECRET_VALUE=$(aws secretsmanager get-secret-value --region ${AWS::Region} --secret-id ${SecretId} --query 'SecretString' --output text)
-          export MY_SECRET=$SECRET_VALUE
+              # Start timing
+          echo "UserData script started at: $(date)"
+          # Enable error logging
+          exec > >(tee /var/log/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1
+          # Fix Python symlink for dnf
+          ln -sf /usr/bin/python3.9 /usr/bin/python3
+          # Install development tools and dependencies
+          echo "Installing development tools and dependencies..."
+          dnf groupinstall "Development Tools" -y
+          dnf install openssl-devel bzip2-devel libffi-devel zlib-devel readline-devel sqlite-devel xz-devel -y
+          cd /opt
+          wget https://www.python.org/ftp/python/3.13.0/Python-3.13.0a5.tgz
+          tar xzf Python-3.13.0a5.tgz
+          cd Python-3.13.0a5
+          ./configure --enable-optimizations --with-ensurepip=install --prefix=/usr/local
+          # Get number of CPU cores for parallel build
+          CORES=$(nproc)
+          echo "Building Python using $CORES cores..."
+          make -j "$CORES"
+          
+          echo "Installing Python..."
+          make altinstall
+
+          # Remove any existing PostgreSQL
+          dnf remove postgresql* -y
+    
+          # Install PostgreSQL 16
+          dnf install -y postgresql16
+          
+          # Get credentials and store them properly
+          # Try to set up database credentials, but don't fail if it doesn't work
+          {
+            # Get credentials and store them properly
+            DB_CREDS="$(aws secretsmanager get-secret-value --region ${AWS::Region} --secret-id '${SecretId}' --query 'SecretString' --output text)"
+            
+            # Parse the JSON string and store values
+            DB_USERNAME=$(echo $DB_CREDS | jq -r '.username')
+            DB_PASSWORD=$(echo $DB_CREDS | jq -r '.password')
+      
+            if [ ! -z "$DB_PASSWORD" ]; then
+      
+              # Add PostgreSQL environment variables
+              cat > /etc/profile.d/psql_env.sh << EOF
+              export PGHOST='database-das-instance-1.czs7ypx6yux2.us-east-1.rds.amazonaws.com'
+              export PGUSER='postgres'
+              export PGDATABASE='postgres'
+              EOF
+              
+              echo "PostgreSQL credentials setup completed successfully"
+            else
+              echo "Skipping PostgreSQL credentials setup - no credentials retrieved"
+            fi
+          } || {
+            echo "PostgreSQL credentials setup failed, but continuing with instance setup"
+          }
+          echo "UserData script completed at: $(date)"
+
+
+
 
 
   # Allow EC2 to access Aurora
@@ -126,9 +180,10 @@ Outputs:
   EC2SecurityGroupId:
     Description: Security Group ID for EC2 instance
     Value: !Ref EC2SecurityGroup
+#sudo amazon-linux-extras install epel -ok
 
 
-#aws cloudformation deploy --template-file ec2-connect-aurora.yaml --stack-name aurora-ec2-client -- profile sandbox--capabilities CAPABILITY_IAM\
+#aws cloudformation deploy --template-file ec2-connect-aurora.yaml --stack-name aurora-ec2-client --profile sandbox --capabilities CAPABILITY_IAM\
 #  --parameter-overrides \
 #    ExistingVPCId=vpc-xxxx \
 #    PublicSubnetId=subnet-xxxx \
@@ -136,3 +191,5 @@ Outputs:
 #    KeyPairName=your-key-pair \
 #    InstanceType=t3.micro \
 
+#aws secretsmanager get-secret-value --region us-east-1 --secret-id rds!cluster-09cbfc0d-f087-4779-a4b6-cfd855d35a39 --query 'SecretString
+#cat /var/log/cloud-init-output.log

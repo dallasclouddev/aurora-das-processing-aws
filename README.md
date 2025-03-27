@@ -45,10 +45,10 @@ See [CONTRIBUTING](CONTRIBUTING.md#security-issue-notifications) for more inform
 
 This library is licensed under the MIT-0 License. See the LICENSE file.
 ## Connect to Aurora RDS
-psql --host=database-das-instance-1.czs7ypx6yux2.us-east-1.rds.amazonaws.com \
+**psql --host=database-das-instance-1.czs7ypx6yux2.us-east-1.rds.amazonaws.com \
      --port=5432 \
      --username=postgres \
-     --dbname=postgres
+     --dbname=postgres**
 
 ## ADD record in DB table
 INSERT INTO actor (first_name, last_name, last_update)
