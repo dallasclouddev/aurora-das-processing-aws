@@ -1,0 +1,92 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Template to create Kinesis Data Stream'
+
+Parameters:
+  StreamName:
+    Type: String
+    Description: Name of the Kinesis Data Stream
+    Default: aurora-postgres-cdc-kinesis
+
+  RetentionHours:
+    Type: Number
+    Description: Data retention period in hours (24-168)
+    Default: 24
+    MinValue: 24
+    MaxValue: 168
+
+  ShardCount:
+    Type: Number
+    Description: Number of shards for the stream
+    Default: 1
+    MinValue: 1
+    MaxValue: 3
+
+Resources:
+  KinesisKMSKey:
+    Type: 'AWS::KMS::Key'
+    Properties:
+      Description: 'KMS key for Kinesis Data Stream encryption'
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: 'Enable IAM User Permissions'
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
+            Action: 'kms:*'
+            Resource: '*'
+          - Sid: 'Allow Kinesis to use the key'
+            Effect: Allow
+            Principal:
+              Service: kinesis.amazonaws.com
+            Action:
+              - kms:Decrypt
+              - kms:GenerateDataKey
+            Resource: '*'
+      Tags:
+        - Key: Purpose
+          Value: KinesisEncryption
+  KMSKeyAlias:
+    Type: 'AWS::KMS::Alias'
+    Properties:
+      AliasName: !Sub 'alias/${StreamName}-key'
+      TargetKeyId: !Ref KinesisKMSKey
+
+  KinesisStream:
+    Type: 'AWS::Kinesis::Stream'
+    Properties:
+      Name: !Ref StreamName
+      RetentionPeriodHours: !Ref RetentionHours
+      ShardCount: !Ref ShardCount
+      StreamEncryption:
+        EncryptionType: KMS
+        KeyId: !Ref KinesisKMSKey
+      Tags:
+        - Key: Environment
+          Value: Sandbox
+        - Key: Service
+          Value: DataStream
+
+Outputs:
+  StreamArn:
+    Description: ARN of the Kinesis Stream
+    Value: !GetAtt KinesisStream.Arn
+
+  StreamName:
+    Description: Name of the Kinesis Stream
+    Value: !Ref StreamName
+
+  KMSKeyId:
+    Description: ID of the KMS Key
+    Value: !Ref KinesisKMSKey
+
+  KMSKeyArn:
+    Description: ARN of the KMS Key
+    Value: !GetAtt KinesisKMSKey.Arn
+
+  KMSKeyAlias:
+    Description: Alias of the KMS Key
+    Value: !Ref KMSKeyAlias
+
+#aws cloudformation create-stack --stack-name aurora-postgres-cdc-kinesis --template-body file://cdc-kinesis.yaml --profile sandbox --capabilities CAPABILITY_IAM
